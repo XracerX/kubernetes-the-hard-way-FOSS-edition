@@ -27,7 +27,7 @@ Component versions:
 
 ## Labs
 
-This tutorial requires four (4) ARM64 or AMD64 based virtual or physical machines connected to the same network.
+This tutorial requires four (4) ARM64 or AMD64 based Alpine Linux virtual machines connected to the same network using qemu + KVM.
 
 * [Prerequisites](docs/01-prerequisites.md)
 * [Setting up the Jumpbox](docs/02-jumpbox.md)
