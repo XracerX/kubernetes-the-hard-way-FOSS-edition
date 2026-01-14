@@ -13,7 +13,6 @@ In this lab you will review the machine requirements necessary to follow this tu
 | server  | Kubernetes server      | 1   | 2GB   | 20GB    |
 | node-0  | Kubernetes worker node | 1   | 2GB   | 20GB    |
 | node-1  | Kubernetes worker node | 1   | 2GB   | 20GB    |
-|---------|------------------------|-----|-------|---------|
 | TOTAL   |  total resources       | 4   | 6.5GB | 70GB    | 
 
 How you provision the machines is up to you, the only requirement is that each machine meet the above system requirements including the machine specs and OS version. Once you have all four machines provisioned, verify the OS requirements by viewing the `/etc/os-release` file:
