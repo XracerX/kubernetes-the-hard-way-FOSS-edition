@@ -20,134 +20,106 @@ In this lab you will review the machine requirements necessary to follow this tu
 * download the alpine linux ISO
 
 '''
-To provision these four VMs on an Ubuntu host using KVM/QEMU, the most efficient method is using `virt-install`. This assumes you have the Alpine Linux "Virtual" ISO downloaded.
+To provision Alpine Linux non-interactively using KVM/QEMU, the standard approach is to use a **Cloud Image** combined with **Cloud-Init**. Unlike the "Virtual" ISO which requires a manual install script, the Cloud Image is a pre-installed disk template that configures itself on the first boot.
 
-### 1. Prerequisites
+### 1. Download the Alpine Cloud Image
 
-Install the necessary virtualization packages and start the default network (which provides a NAT bridge for VM-to-VM communication).
-
-```bash
-sudo apt update
-sudo apt install -y qemu-kvm libvirt-daemon-system libvirt-clients virtinst bridge-utils
-
-# Ensure the default network is active
-sudo virsh net-start default
-sudo virsh net-autostart default
-
-```
-
----
-
-### 2. Prepare the Storage
-
-Create a directory to house your virtual disk images.
+On your Ubuntu host, download the latest Alpine "cloud" image (standard qcow2 format).
 
 ```bash
-sudo mkdir -p /var/lib/libvirt/images/alpine-cluster
+mkdir -p /var/lib/libvirt/images/alpine-cluster
 cd /var/lib/libvirt/images/alpine-cluster
 
-```
-
----
-
-### 3. Provisioning Commands
-
-Run these commands to create each VM. Replace `/path/to/alpine-virt.iso` with the actual path to your downloaded Alpine ISO.
-
-#### Jumpbox
-
-```bash
-virt-install \
-  --name jumpbox \
-  --ram 512 \
-  --vcpus 1 \
-  --disk size=10,path=/var/lib/libvirt/images/alpine-cluster/jumpbox.qcow2 \
-  --os-variant alpine3.18 \
-  --network network=default \
-  --graphics none \
-  --console pty,target_type=serial \
-  --location /path/to/alpine-virt.iso \
-  --extra-args "console=ttyS0"
-
-```
-
-#### Kubernetes Server
-
-```bash
-virt-install \
-  --name server \
-  --ram 2048 \
-  --vcpus 1 \
-  --disk size=20,path=/var/lib/libvirt/images/alpine-cluster/server.qcow2 \
-  --os-variant alpine3.18 \
-  --network network=default \
-  --graphics none \
-  --console pty,target_type=serial \
-  --location /path/to/alpine-virt.iso \
-  --extra-args "console=ttyS0"
-
-```
-
-#### Worker Node 0
-
-```bash
-virt-install \
-  --name node-0 \
-  --ram 2048 \
-  --vcpus 1 \
-  --disk size=20,path=/var/lib/libvirt/images/alpine-cluster/node-0.qcow2 \
-  --os-variant alpine3.18 \
-  --network network=default \
-  --graphics none \
-  --console pty,target_type=serial \
-  --location /path/to/alpine-virt.iso \
-  --extra-args "console=ttyS0"
-
-```
-
-#### Worker Node 1
-
-```bash
-virt-install \
-  --name node-1 \
-  --ram 2048 \
-  --vcpus 1 \
-  --disk size=20,path=/var/lib/libvirt/images/alpine-cluster/node-1.qcow2 \
-  --os-variant alpine3.18 \
-  --network network=default \
-  --graphics none \
-  --console pty,target_type=serial \
-  --location /path/to/alpine-virt.iso \
-  --extra-args "console=ttyS0"
+# Download the x86_64 cloud image (Update version number if a newer one is available)
+wget https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/cloud/nocloud_alpine-3.20.3-x86_64-bios-cloudinit-r0.qcow2 -O alpine-base.qcow2
 
 ```
 
 ---
 
-### 4. Networking and Connectivity
+### 2. Create the Cloud-Init Config
 
-By using `--network network=default`, all four VMs are attached to the `virbr0` bridge. They will receive IP addresses via DHCP in the `192.168.122.x` range and can communicate with each other immediately.
+Cloud-init uses a `user-data` file to set the password, SSH keys, and run initial commands (like installing Kubernetes dependencies).
 
-To find their IP addresses once they are booted:
+**Create a file named `user-data`:**
 
-```bash
-virsh net-dhcp-leases default
+```yaml
+#cloud-config
+password: "your-safe-password"
+chpasswd: { expire: False }
+ssh_pwauth: True
+ssh_authorized_keys:
+  - ssh-ed25519 AAAAC3Nza... your_email@example.com
+
+# Automatically update and install basic tools
+apk:
+  repositories:
+    - https://dl-cdn.alpinelinux.org/alpine/v3.20/main
+    - https://dl-cdn.alpinelinux.org/alpine/v3.20/community
+  packages:
+    - curl
+    - bash
+    - htop
+
+runcmd:
+  - setup-hostname ${hostname}
 
 ```
 
-### 5. Post-Installation Note
+---
 
-Once the `virt-install` command triggers the boot, you will be inside the Alpine console. You must run the Alpine setup script to install the OS to the virtual disk, as Alpine runs in RAM by default:
+### 3. Provisioning Script
+
+Because we are using a template, we need to create a unique copy of the base disk for each VM. The following script automates the disk creation and the `virt-install` process for all four VMs simultaneously.
 
 ```bash
-setup-alpine
+#!/bin/bash
+
+# Define resources in an array: Name|RAM|DiskSize
+VMS=(
+  "jumpbox|512|10"
+  "server|2048|20"
+  "node-0|2048|20"
+  "node-1|2048|20"
+)
+
+BASE_IMG="/var/lib/libvirt/images/alpine-cluster/alpine-base.qcow2"
+
+for vm in "${VMS[@]}"; do
+  IFS='|' read -r NAME RAM DISK <<< "$vm"
+  DISK_PATH="/var/lib/libvirt/images/alpine-cluster/${NAME}.qcow2"
+
+  # 1. Create a linked clone (saves space) or a full copy
+  # Using a copy here to match your specific disk size requirements
+  cp "$BASE_IMG" "$DISK_PATH"
+  qemu-img resize "$DISK_PATH" "${DISK}G"
+
+  # 2. Provision with cloud-init
+  virt-install \
+    --name "$NAME" \
+    --ram "$RAM" \
+    --vcpus 1 \
+    --disk path="$DISK_PATH",format=qcow2 \
+    --os-variant alpinelinux3.18 \
+    --network network=default \
+    --cloud-init user-data=user-data \
+    --graphics none \
+    --noautoconsole \
+    --import
+done
 
 ```
 
-Select `sys` as the disk mode to ensure the OS is installed permanently to the `.qcow2` files.
+### 4. Verification
+
+Once the script finishes, the VMs will boot in the background. They will automatically resize their partitions and apply your settings.
+
+* **Check Status:** `virsh list --all`
+* **Check IP Addresses:** `virsh net-dhcp-leases default`
+* **Access a VM:** `virsh console jumpbox` (Use `Ctrl + ]` to exit the console)
+
+By using `--import`, `virt-install` skips the OS installation phase entirely because the disk image is already "ready to run." All customization is handled by the `user-data` file provided via the `--cloud-init` flag.
 '''
-
-Once you have all four machines provisioned, verify the OS requirements by viewing the `/etc/os-release` file:
 
 ### CHECK THE OS 
 
